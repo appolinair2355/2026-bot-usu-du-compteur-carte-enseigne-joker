@@ -28,14 +28,12 @@ BOT_TOKEN = os.getenv('BOT_TOKEN') or ''
 
 PORT = int(os.getenv('PORT') or '10000')  # Port 10000 for Render.com
 
-# NOUVEAU MAPPING : Échange des enseignes de même couleur (Noir/Noir et Rouge/Rouge)
-# Note : Les variantes multiples (♠️, ♥, etc.) du mapping précédent ont été retirées 
-# pour simplifier, car elles sont gérées par SUIT_DISPLAY et ALL_SUITS.
+# NOUVEAU MAPPING : Miroirs selon les instructions utilisateur
 SUIT_MAPPING = {
-    '♠': '♣',  # Pique manque -> Prédit Trèfle
-    '♣': '♠',  # Trèfle manque -> Prédit Pique
-    '♥': '♦',  # Cœur manque -> Prédit Carreau
-    '♦': '♥',  # Carreau manque -> Prédit Cœur
+    '♦': '♠',  # Miroir Carreau <-> Pique
+    '♠': '♦',
+    '♥': '♣',  # Miroir Cœur <-> Trèfle
+    '♣': '♥',
 }
 
 ALL_SUITS = ['♠', '♥', '♦', '♣']

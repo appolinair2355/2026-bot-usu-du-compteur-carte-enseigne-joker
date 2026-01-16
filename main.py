@@ -296,21 +296,21 @@ async def check_prediction_result(game_number: int, first_group: str):
                 return
 
 async def process_stats_message(message_text: str):
-    """Traite les statistiques du canal 2 selon les miroirs ❤️<->♣️ et ♦️<->♠️."""
+    """Traite les statistiques du canal 2 selon les miroirs ♦️<->♠️ et ❤️<->♣️."""
     global last_source_game_number, suit_prediction_counts
     stats = parse_stats_message(message_text)
     if not stats:
         return
 
-    # Miroirs : ❤️<->♣️ et ♦️<->♠️
-    pairs = [('♥', '♣'), ('♦', '♠')]
+    # Miroirs : ♦️<->♠️ et ❤️<->♣️
+    pairs = [('♦', '♠'), ('♥', '♣')]
     
     for s1, s2 in pairs:
         if s1 in stats and s2 in stats:
             v1, v2 = stats[s1], stats[s2]
             diff = abs(v1 - v2)
             if diff >= 6:
-                # Prédire le plus faible (le compteur du plus petit)
+                # Prédire le plus faible parmi les deux miroirs
                 predicted_suit = s1 if v1 < v2 else s2
                 
                 # Vérifier la limite de 2 prédictions consécutives pour ce costume
@@ -319,14 +319,14 @@ async def process_stats_message(message_text: str):
                     logger.info(f"Limite de 2 prédictions atteinte pour {predicted_suit}, ignorée.")
                     continue
 
-                logger.info(f"Décalage détecté entre {s1} ({v1}) et {s2} ({v2}): {diff}")
+                logger.info(f"Décalage détecté entre {s1} ({v1}) et {s2} ({v2}): {diff}. Plus faible: {predicted_suit}")
                 
                 if last_source_game_number > 0:
                     target_game = last_source_game_number + USER_A
                     if queue_prediction(target_game, predicted_suit, last_source_game_number):
                         # Incrémenter le compteur pour ce costume
                         suit_prediction_counts[predicted_suit] = current_count + 1
-                        # Réinitialiser les autres costumes (car ce n'est plus le même costume consécutif)
+                        # Réinitialiser les autres costumes
                         for s in ALL_SUITS:
                             if s != predicted_suit:
                                 suit_prediction_counts[s] = 0
