@@ -510,7 +510,7 @@ async def start_web_server():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    site = web.TCPSite(runner, '0.0.0.0', PORT)
     await site.start() 
 
 async def schedule_daily_reset():
