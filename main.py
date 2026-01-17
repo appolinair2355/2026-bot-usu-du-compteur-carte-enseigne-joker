@@ -66,7 +66,8 @@ transfer_enabled = True # Initialisé à True
 
 def extract_game_number(message: str):
     """Extrait le numéro de jeu du message."""
-    match = re.search(r"#N\s*(\d+)\.?", message, re.IGNORECASE)
+    # Pattern plus flexible pour #N59 ou #N 59
+    match = re.search(r"#N\s*(\d+)", message, re.IGNORECASE)
     if match:
         return int(match.group(1))
     return None
@@ -76,10 +77,10 @@ def parse_stats_message(message: str):
     stats = {}
     # Pattern pour extraire : ♠️ : 9 (23.7 %)
     patterns = {
-        '♠': r'♠️\s*:\s*(\d+)',
-        '♥': r'♥️\s*:\s*(\d+)',
-        '♦': r'♦️\s*:\s*(\d+)',
-        '♣': r'♣️\s*:\s*(\d+)'
+        '♠': r'♠️?\s*:\s*(\d+)',
+        '♥': r'♥️?\s*:\s*(\d+)',
+        '♦': r'♦️?\s*:\s*(\d+)',
+        '♣': r'♣️?\s*:\s*(\d+)'
     }
     for suit, pattern in patterns.items():
         match = re.search(pattern, message)
@@ -187,32 +188,21 @@ def queue_prediction(target_game: int, predicted_suit: str, base_game: int, ratt
     return True
 
 async def check_and_send_queued_predictions(current_game: int):
-    """Vérifie la file d'attente et envoie si la distance est de 3 ou 2 jeux."""
+    """Vérifie la file d'attente et envoie les prédictions."""
     global current_game_number
     current_game_number = current_game
 
     sorted_queued = sorted(queued_predictions.keys())
 
     for target_game in sorted_queued:
-        distance = target_game - current_game
-
-        # Les rattrapages sont envoyés immédiatement au jeu suivant
-        is_rattrapage = queued_predictions[target_game].get('rattrapage', 0) > 0
-
-        if not is_rattrapage and distance <= 1: 
-            logger.warning(f"⚠️ Fenêtre d'envoi manquée pour #{target_game}. Supprimée.")
-            queued_predictions.pop(target_game, None)
-            continue 
-        
-        if is_rattrapage or distance <= PROXIMITY_THRESHOLD: 
-            pred_data = queued_predictions.pop(target_game)
-            await send_prediction_to_channel(
-                pred_data['target_game'],
-                pred_data['predicted_suit'],
-                pred_data['base_game'],
-                pred_data.get('rattrapage', 0),
-                pred_data.get('original_game')
-            )
+        pred_data = queued_predictions.pop(target_game)
+        await send_prediction_to_channel(
+            pred_data['target_game'],
+            pred_data['predicted_suit'],
+            pred_data['base_game'],
+            pred_data.get('rattrapage', 0),
+            pred_data.get('original_game')
+        )
 
 async def update_prediction_status(game_number: int, new_status: str):
     """Met à jour le message de prédiction dans le canal."""
@@ -336,7 +326,8 @@ def is_message_finalized(message: str) -> bool:
     """Vérifie si le message est un résultat final (non en cours)."""
     if '⏰' in message:
         return False
-    return '✅' in message or '🔰' in message
+    # Accepter les messages qui ont un résultat (par exemple "▶️") ou les symboles de validation
+    return '✅' in message or '🔰' in message or '▶️' in message
 
 async def process_finalized_message(message_text: str, chat_id: int):
     """Traite les messages du canal source 1 ou 2."""
@@ -382,15 +373,20 @@ async def handle_message(event):
         
         # LOG DE DÉBOGAGE POUR VOIR TOUS LES MESSAGES ENTRANTS
         chat = await event.get_chat()
-        chat_id = chat.id if hasattr(chat, 'id') else event.chat_id
-        if chat_id > 0 and hasattr(chat, 'broadcast') and chat.broadcast:
-            chat_id = -1000000000000 - chat_id
+        chat_id = chat.id
+        # Convert internal ID to -100xxx format if it's a channel
+        if hasattr(chat, 'broadcast') and chat.broadcast:
+            if not str(chat_id).startswith('-100'):
+                chat_id = int(f"-100{abs(chat_id)}")
             
         logger.info(f"DEBUG: Message reçu de chat_id={chat_id}: {event.message.message[:50]}...")
 
         if chat_id == SOURCE_CHANNEL_ID or chat_id == SOURCE_CHANNEL_2_ID:
             message_text = event.message.message
             await process_finalized_message(message_text, chat_id)
+            # Après traitement, si c'est le canal 2, on force la vérification de l'envoi
+            if chat_id == SOURCE_CHANNEL_2_ID:
+                await check_and_send_queued_predictions(current_game_number)
             
         # Gérer les commandes admin même si elles ne viennent pas d'un canal
         if sender_id == ADMIN_ID:
@@ -404,13 +400,17 @@ async def handle_edited_message(event):
     """Gère les messages édités dans les canaux sources."""
     try:
         chat = await event.get_chat()
-        chat_id = chat.id if hasattr(chat, 'id') else event.chat_id
-        if chat_id > 0 and hasattr(chat, 'broadcast') and chat.broadcast:
-            chat_id = -1000000000000 - chat_id
+        chat_id = chat.id
+        if hasattr(chat, 'broadcast') and chat.broadcast:
+            if not str(chat_id).startswith('-100'):
+                chat_id = int(f"-100{abs(chat_id)}")
 
         if chat_id == SOURCE_CHANNEL_ID or chat_id == SOURCE_CHANNEL_2_ID:
             message_text = event.message.message
             await process_finalized_message(message_text, chat_id)
+            # Après traitement, si c'est le canal 2, on force la vérification de l'envoi
+            if chat_id == SOURCE_CHANNEL_2_ID:
+                await check_and_send_queued_predictions(current_game_number)
 
     except Exception as e:
         logger.error(f"Erreur handle_edited_message: {e}")
@@ -510,7 +510,7 @@ async def start_web_server():
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '0.0.0.0', PORT)
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start() 
 
 async def schedule_daily_reset():
