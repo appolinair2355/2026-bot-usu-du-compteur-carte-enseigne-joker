@@ -51,8 +51,8 @@ last_transferred_game = None
 current_game_number = 0
 last_source_game_number = 0
 
-# Compteur pour limiter à 2 prédictions par costume
-suit_prediction_counts = {}
+# SUPPRIMÉ : Compteur pour limiter à 2 prédictions par costume (plus besoin)
+# suit_prediction_counts = {}
 
 MAX_PENDING_PREDICTIONS = 5  # Augmenté pour gérer les rattrapages
 PROXIMITY_THRESHOLD = 3      # Nombre de jeux avant l'envoi depuis la file d'attente
@@ -118,6 +118,7 @@ def get_predicted_suit(missing_suit: str) -> str:
     # Assurez-vous que SUIT_MAPPING dans config.py contient :
     # SUIT_MAPPING = {'♠': '♣', '♣': '♠', '♥': '♦', '♦': '♥'}
     return SUIT_MAPPING.get(missing_suit, missing_suit)
+
 # --- Logique de Prédiction et File d'Attente ---
 
 async def send_prediction_to_channel(target_game: int, predicted_suit: str, base_game: int, rattrapage=0, original_game=None):
@@ -287,7 +288,7 @@ async def check_prediction_result(game_number: int, first_group: str):
 
 async def process_stats_message(message_text: str):
     """Traite les statistiques du canal 2 selon les miroirs ♦️<->♠️ et ❤️<->♣️."""
-    global last_source_game_number, suit_prediction_counts
+    global last_source_game_number
     stats = parse_stats_message(message_text)
     if not stats:
         return
@@ -299,27 +300,27 @@ async def process_stats_message(message_text: str):
         if s1 in stats and s2 in stats:
             v1, v2 = stats[s1], stats[s2]
             diff = abs(v1 - v2)
-            if diff >= 6:
+            
+            # MODIFIÉ : 6 changé à 10
+            if diff >= 10:
                 # Prédire le plus faible parmi les deux miroirs
                 predicted_suit = s1 if v1 < v2 else s2
                 
-                # Vérifier la limite de 2 prédictions consécutives pour ce costume
-                current_count = suit_prediction_counts.get(predicted_suit, 0)
-                if current_count >= 2:
-                    logger.info(f"Limite de 2 prédictions atteinte pour {predicted_suit}, ignorée.")
-                    continue
+                # SUPPRIMÉ : Plus de vérification de limite de 2 prédictions consécutives
+                # Le bot prédit maintenant peu importe le costume, même si répété
 
                 logger.info(f"Décalage détecté entre {s1} ({v1}) et {s2} ({v2}): {diff}. Plus faible: {predicted_suit}")
                 
                 if last_source_game_number > 0:
                     target_game = last_source_game_number + USER_A
-                    if queue_prediction(target_game, predicted_suit, last_source_game_number):
-                        # Incrémenter le compteur pour ce costume
-                        suit_prediction_counts[predicted_suit] = current_count + 1
-                        # Réinitialiser les autres costumes
-                        for s in ALL_SUITS:
-                            if s != predicted_suit:
-                                suit_prediction_counts[s] = 0
+                    queue_prediction(target_game, predicted_suit, last_source_game_number)
+                    
+                    # SUPPRIMÉ : Plus de gestion des compteurs de costumes
+                    # suit_prediction_counts[predicted_suit] = current_count + 1
+                    # for s in ALL_SUITS:
+                    #     if s != predicted_suit:
+                    #         suit_prediction_counts[s] = 0
+                    
                     return # Une seule prédiction par message de stats
 
 def is_message_finalized(message: str) -> bool:
@@ -481,7 +482,7 @@ async def cmd_help(event):
 
 **Règles de prédiction :**
 1. Surveille le **Canal Source 2** (Stats).
-2. Si un décalage d'au moins **6 jeux** existe entre deux cartes :
+2. Si un décalage d'au moins **10 jeux** existe entre deux cartes :
    - Prédit la carte en avance.
    - Cible le jeu : **Dernier numéro Source 1 + a**.
 3. **Rattrapages :** Si la carte ne sort pas au jeu cible, le bot retente sur les **3 jeux suivants** (3 rattrapages).
@@ -533,13 +534,13 @@ async def schedule_daily_reset():
 
         logger.warning("🚨 RESET QUOTIDIEN À 00h59 WAT DÉCLENCHÉ!")
         
-        global pending_predictions, queued_predictions, recent_games, processed_messages, last_transferred_game, current_game_number, last_source_game_number, suit_prediction_counts
+        global pending_predictions, queued_predictions, recent_games, processed_messages, last_transferred_game, current_game_number, last_source_game_number
 
         pending_predictions.clear()
         queued_predictions.clear()
         recent_games.clear()
         processed_messages.clear()
-        suit_prediction_counts.clear()
+        # SUPPRIMÉ : suit_prediction_counts.clear() (variable supprimée)
         last_transferred_game = None
         current_game_number = 0
         last_source_game_number = 0
@@ -593,4 +594,3 @@ if __name__ == '__main__':
         logger.error(f"Erreur fatale: {e}")
         import traceback
         logger.error(traceback.format_exc())
-    
