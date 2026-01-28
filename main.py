@@ -51,8 +51,11 @@ last_transferred_game = None
 current_game_number = 0
 last_source_game_number = 0
 
-# SUPPRIMÉ : Compteur pour limiter à 2 prédictions par costume (plus besoin)
-# suit_prediction_counts = {}
+# NOUVELLES VARIABLES POUR LA LOGIQUE DE BLOCAGE
+suit_consecutive_counts = {}  # Compteur de prédictions consécutives par costume
+suit_results_history = {}     # Historique des 3 derniers résultats par costume
+suit_block_until = {}         # Timestamp de fin de blocage pour chaque costume
+last_predicted_suit = None    # Dernier costume prédit (pour détecter les changements)
 
 MAX_PENDING_PREDICTIONS = 5  # Augmenté pour gérer les rattrapages
 PROXIMITY_THRESHOLD = 3      # Nombre de jeux avant l'envoi depuis la file d'attente
@@ -207,6 +210,8 @@ async def check_and_send_queued_predictions(current_game: int):
 
 async def update_prediction_status(game_number: int, new_status: str):
     """Met à jour le message de prédiction dans le canal."""
+    global suit_consecutive_counts, suit_results_history, suit_block_until, last_predicted_suit
+    
     try:
         if game_number not in pending_predictions:
             return False
@@ -226,6 +231,48 @@ async def update_prediction_status(game_number: int, new_status: str):
             except Exception as e:
                 logger.error(f"❌ Erreur mise à jour: {e}")
 
+        # --- NOUVELLE LOGIQUE DE GESTION DES RÉSULTATS ---
+        
+        # Initialiser l'historique pour ce costume si nécessaire
+        if suit not in suit_results_history:
+            suit_results_history[suit] = []
+        
+        # Ajouter le nouveau résultat à l'historique (garder les 3 derniers)
+        suit_results_history[suit].append(new_status)
+        if len(suit_results_history[suit]) > 3:
+            suit_results_history[suit].pop(0)
+        
+        # Vérifier si on a 3 résultats pour ce costume
+        if len(suit_results_history[suit]) == 3:
+            logger.info(f"3 résultats consécutifs pour {suit}: {suit_results_history[suit]}")
+            
+            # CAS 1 : Si au moins un ❌ dans les 3 résultats
+            if '❌' in suit_results_history[suit]:
+                logger.info(f"❌ détecté pour {suit} → Lancement immédiat au numéro suivant")
+                
+                # Lancer immédiatement une nouvelle prédiction pour le même costume
+                if last_source_game_number > 0:
+                    target_game = last_source_game_number + 1
+                    queue_prediction(target_game, suit, last_source_game_number)
+                
+                # Puis bloquer ce costume pendant 5 minutes
+                block_until = datetime.now() + timedelta(minutes=5)
+                suit_block_until[suit] = block_until
+                suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
+                logger.info(f"{suit} bloqué jusqu'à {block_until}")
+            
+            # CAS 2 : Si 3 succès consécutifs (tous ✅)
+            elif all('✅' in result for result in suit_results_history[suit]):
+                logger.info(f"3 succès consécutifs pour {suit} → Blocage 5 minutes")
+                block_until = datetime.now() + timedelta(minutes=5)
+                suit_block_until[suit] = block_until
+                suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
+                logger.info(f"{suit} bloqué jusqu'à {block_until}")
+            
+            # Réinitialiser l'historique après traitement
+            suit_results_history[suit] = []
+        
+        # Mettre à jour le statut de la prédiction
         pred['status'] = new_status
         
         # Supprimer si terminé
@@ -288,12 +335,13 @@ async def check_prediction_result(game_number: int, first_group: str):
 
 async def process_stats_message(message_text: str):
     """Traite les statistiques du canal 2 selon les miroirs ♦️<->♠️ et ❤️<->♣️."""
-    global last_source_game_number
+    global last_source_game_number, last_predicted_suit, suit_consecutive_counts, suit_block_until
+    
     stats = parse_stats_message(message_text)
     if not stats:
         return
 
-    # Miroirs : ♦️<->♠️ et ❤️<->♣️
+    # Miroirs : ♦️<->♠️ et ❥️<->♣️
     pairs = [('♦', '♠'), ('♥', '♣')]
     
     for s1, s2 in pairs:
@@ -306,20 +354,33 @@ async def process_stats_message(message_text: str):
                 # Prédire le plus faible parmi les deux miroirs
                 predicted_suit = s1 if v1 < v2 else s2
                 
-                # SUPPRIMÉ : Plus de vérification de limite de 2 prédictions consécutives
-                # Le bot prédit maintenant peu importe le costume, même si répété
-
+                # --- NOUVELLE LOGIQUE DE BLOCAGE ---
+                
+                # Vérifier si ce costume est bloqué
+                if predicted_suit in suit_block_until:
+                    block_until = suit_block_until[predicted_suit]
+                    if datetime.now() < block_until:
+                        logger.info(f"{predicted_suit} est bloqué jusqu'à {block_until}, prédiction ignorée")
+                        return False
+                    else:
+                        # Blocage expiré, nettoyer
+                        del suit_block_until[predicted_suit]
+                        suit_consecutive_counts[predicted_suit] = 0
+                
+                # Réinitialiser le compteur si changement de costume
+                if last_predicted_suit and last_predicted_suit != predicted_suit:
+                    suit_consecutive_counts[last_predicted_suit] = 0
+                
                 logger.info(f"Décalage détecté entre {s1} ({v1}) et {s2} ({v2}): {diff}. Plus faible: {predicted_suit}")
                 
                 if last_source_game_number > 0:
                     target_game = last_source_game_number + USER_A
-                    queue_prediction(target_game, predicted_suit, last_source_game_number)
                     
-                    # SUPPRIMÉ : Plus de gestion des compteurs de costumes
-                    # suit_prediction_counts[predicted_suit] = current_count + 1
-                    # for s in ALL_SUITS:
-                    #     if s != predicted_suit:
-                    #         suit_prediction_counts[s] = 0
+                    # Mettre en file d'attente et incrémenter le compteur
+                    if queue_prediction(target_game, predicted_suit, last_source_game_number):
+                        suit_consecutive_counts[predicted_suit] = suit_consecutive_counts.get(predicted_suit, 0) + 1
+                        last_predicted_suit = predicted_suit
+                        logger.info(f"Compteur {predicted_suit}: {suit_consecutive_counts[predicted_suit]}")
                     
                     return # Une seule prédiction par message de stats
 
@@ -465,8 +526,16 @@ async def cmd_status(event):
     status_msg += f"🎮 Jeu actuel (Source 1): #{current_game_number}\n"
     status_msg += f"🔢 Paramètre 'a': {USER_A}\n\n"
     
+    # Afficher les blocages actifs
+    if suit_block_until:
+        status_msg += f"**🔒 Blocages actifs:**\n"
+        for suit, block_time in suit_block_until.items():
+            if datetime.now() < block_time:
+                remaining = block_time - datetime.now()
+                status_msg += f"• {suit}: {remaining.seconds}s restantes\n"
+    
     if pending_predictions:
-        status_msg += f"**🔮 Actives ({len(pending_predictions)}):**\n"
+        status_msg += f"\n**🔮 Actives ({len(pending_predictions)}):**\n"
         for game_num, pred in sorted(pending_predictions.items()):
             distance = game_num - current_game_number
             ratt = f" (R{pred['rattrapage']})" if pred.get('rattrapage', 0) > 0 else ""
@@ -478,7 +547,7 @@ async def cmd_status(event):
 @client.on(events.NewMessage(pattern='/help'))
 async def cmd_help(event):
     if event.is_group or event.is_channel: return
-    await event.respond(f"""📖 **Aide - Bot de Prédiction V2**
+    await event.respond(f"""📖 **Aide - Bot de Prédiction V3**
 
 **Règles de prédiction :**
 1. Surveille le **Canal Source 2** (Stats).
@@ -486,6 +555,10 @@ async def cmd_help(event):
    - Prédit la carte en avance.
    - Cible le jeu : **Dernier numéro Source 1 + a**.
 3. **Rattrapages :** Si la carte ne sort pas au jeu cible, le bot retente sur les **3 jeux suivants** (3 rattrapages).
+4. **Blocage :** 3 prédictions consécutives du même costume:
+   - Si ❌ détecté → Re-lance immédiatement puis bloque 5min
+   - Si 3 succès → Bloque 5min
+   - Si changement de costume → Réinitialise le compteur
 
 **Commandes :**
 - `/status` : Affiche l'état actuel.
@@ -535,15 +608,19 @@ async def schedule_daily_reset():
         logger.warning("🚨 RESET QUOTIDIEN À 00h59 WAT DÉCLENCHÉ!")
         
         global pending_predictions, queued_predictions, recent_games, processed_messages, last_transferred_game, current_game_number, last_source_game_number
+        global suit_consecutive_counts, suit_results_history, suit_block_until, last_predicted_suit
 
         pending_predictions.clear()
         queued_predictions.clear()
         recent_games.clear()
         processed_messages.clear()
-        # SUPPRIMÉ : suit_prediction_counts.clear() (variable supprimée)
+        suit_consecutive_counts.clear()
+        suit_results_history.clear()
+        suit_block_until.clear()
         last_transferred_game = None
         current_game_number = 0
         last_source_game_number = 0
+        last_predicted_suit = None
         
         logger.warning("✅ Toutes les données de prédiction ont été effacées.")
 
