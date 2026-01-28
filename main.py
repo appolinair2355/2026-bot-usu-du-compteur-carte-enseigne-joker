@@ -231,7 +231,7 @@ async def update_prediction_status(game_number: int, new_status: str):
             except Exception as e:
                 logger.error(f"❌ Erreur mise à jour: {e}")
 
-        # --- NOUVELLE LOGIQUE DE GESTION DES RÉSULTATS ---
+        # --- LOGIQUE DE GESTION DES RÉSULTATS (CORRIGÉE) ---
         
         # Initialiser l'historique pour ce costume si nécessaire
         if suit not in suit_results_history:
@@ -242,42 +242,47 @@ async def update_prediction_status(game_number: int, new_status: str):
         if len(suit_results_history[suit]) > 3:
             suit_results_history[suit].pop(0)
         
-        # Vérifier si on a 3 résultats pour ce costume
-        if len(suit_results_history[suit]) == 3:
-            logger.info(f"3 résultats consécutifs pour {suit}: {suit_results_history[suit]}")
-            
-            # CAS 1 : Si au moins un ❌ dans les 3 résultats
-            if '❌' in suit_results_history[suit]:
-                logger.info(f"❌ détecté pour {suit} → Lancement immédiat au numéro suivant")
-                
-                # Lancer immédiatement une nouvelle prédiction pour le même costume
-                if last_source_game_number > 0:
-                    target_game = last_source_game_number + 1
-                    queue_prediction(target_game, suit, last_source_game_number)
-                
-                # Puis bloquer ce costume pendant 5 minutes
-                block_until = datetime.now() + timedelta(minutes=5)
-                suit_block_until[suit] = block_until
-                suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
-                logger.info(f"{suit} bloqué jusqu'à {block_until}")
-            
-            # CAS 2 : Si 3 succès consécutifs (tous ✅)
-            elif all('✅' in result for result in suit_results_history[suit]):
-                logger.info(f"3 succès consécutifs pour {suit} → Blocage 5 minutes")
-                block_until = datetime.now() + timedelta(minutes=5)
-                suit_block_until[suit] = block_until
-                suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
-                logger.info(f"{suit} bloqué jusqu'à {block_until}")
-            
-            # Réinitialiser l'historique après traitement
-            suit_results_history[suit] = []
-        
         # Mettre à jour le statut de la prédiction
         pred['status'] = new_status
         
         # Supprimer si terminé
         if new_status in ['✅0️⃣', '✅1️⃣', '✅2️⃣', '✅3️⃣', '❌']:
             del pending_predictions[game_number]
+            
+            # --- VÉRIFICATION ET BLOCAGE APRÈS RÉSULTAT ---
+            
+            # Vérifier si on a 3 résultats pour ce costume
+            if len(suit_results_history[suit]) == 3:
+                logger.info(f"3 résultats consécutifs pour {suit}: {suit_results_history[suit]}")
+                
+                # CAS 1 : Si au moins un ❌ dans les 3 résultats
+                if '❌' in suit_results_history[suit]:
+                    logger.info(f"❌ détecté pour {suit} → Lancement immédiat au numéro suivant + blocage")
+                    
+                    # Lancer immédiatement une nouvelle prédiction pour le même costume
+                    if current_game_number > 0:
+                        # Utiliser le numéro actuel + 1 pour le re-lancement
+                        target_game = current_game_number + 1
+                        logger.info(f"Re-lancement immédiat de {suit} au jeu #{target_game}")
+                        
+                        # Bypass le blocage en envoyant directement sans vérifier
+                        await send_prediction_to_channel(target_game, suit, current_game_number)
+                    
+                    # Puis bloquer ce costume pendant 5 minutes
+                    block_until = datetime.now() + timedelta(minutes=5)
+                    suit_block_until[suit] = block_until
+                    suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
+                    suit_results_history[suit] = []  # Réinitialiser l'historique
+                    logger.info(f"{suit} bloqué jusqu'à {block_until}")
+                
+                # CAS 2 : Si 3 succès consécutifs (tous ✅)
+                elif all('✅' in result for result in suit_results_history[suit]):
+                    logger.info(f"3 succès consécutifs pour {suit} → Blocage 5 minutes")
+                    block_until = datetime.now() + timedelta(minutes=5)
+                    suit_block_until[suit] = block_until
+                    suit_consecutive_counts[suit] = 0  # Réinitialiser le compteur
+                    suit_results_history[suit] = []  # Réinitialiser l'historique
+                    logger.info(f"{suit} bloqué jusqu'à {block_until}")
 
         return True
     except Exception as e:
@@ -341,7 +346,7 @@ async def process_stats_message(message_text: str):
     if not stats:
         return
 
-    # Miroirs : ♦️<->♠️ et ❥️<->♣️
+    # Miroirs : ♦️<->♠️ et ❤️<->♣️
     pairs = [('♦', '♠'), ('♥', '♣')]
     
     for s1, s2 in pairs:
@@ -354,7 +359,7 @@ async def process_stats_message(message_text: str):
                 # Prédire le plus faible parmi les deux miroirs
                 predicted_suit = s1 if v1 < v2 else s2
                 
-                # --- NOUVELLE LOGIQUE DE BLOCAGE ---
+                # --- LOGIQUE DE BLOCAGE CORRECTE ---
                 
                 # Vérifier si ce costume est bloqué
                 if predicted_suit in suit_block_until:
@@ -366,10 +371,24 @@ async def process_stats_message(message_text: str):
                         # Blocage expiré, nettoyer
                         del suit_block_until[predicted_suit]
                         suit_consecutive_counts[predicted_suit] = 0
+                        suit_results_history[predicted_suit] = []  # Réinitialiser aussi l'historique
+                
+                # Vérifier si on a déjà 3 prédictions consécutives sans ❌
+                # Si oui, bloquer avant de prédire
+                if predicted_suit in suit_results_history and len(suit_results_history[predicted_suit]) == 3:
+                    if '❌' not in suit_results_history[predicted_suit]:
+                        logger.info(f"3 succès consécutifs pour {predicted_suit} → Blocage 5 minutes")
+                        block_until = datetime.now() + timedelta(minutes=5)
+                        suit_block_until[predicted_suit] = block_until
+                        suit_consecutive_counts[predicted_suit] = 0
+                        suit_results_history[predicted_suit] = []
+                        return False
                 
                 # Réinitialiser le compteur si changement de costume
                 if last_predicted_suit and last_predicted_suit != predicted_suit:
                     suit_consecutive_counts[last_predicted_suit] = 0
+                    suit_results_history[last_predicted_suit] = []
+                    logger.info(f"Changement de costume: {last_predicted_suit} -> {predicted_suit}, compteur réinitialisé")
                 
                 logger.info(f"Décalage détecté entre {s1} ({v1}) et {s2} ({v2}): {diff}. Plus faible: {predicted_suit}")
                 
@@ -534,6 +553,13 @@ async def cmd_status(event):
                 remaining = block_time - datetime.now()
                 status_msg += f"• {suit}: {remaining.seconds}s restantes\n"
     
+    # Afficher les compteurs
+    if suit_consecutive_counts:
+        status_msg += f"\n**📊 Compteurs de costumes:**\n"
+        for suit, count in suit_consecutive_counts.items():
+            if count > 0:
+                status_msg += f"• {suit}: {count}/3\n"
+    
     if pending_predictions:
         status_msg += f"\n**🔮 Actives ({len(pending_predictions)}):**\n"
         for game_num, pred in sorted(pending_predictions.items()):
@@ -556,7 +582,7 @@ async def cmd_help(event):
    - Cible le jeu : **Dernier numéro Source 1 + a**.
 3. **Rattrapages :** Si la carte ne sort pas au jeu cible, le bot retente sur les **3 jeux suivants** (3 rattrapages).
 4. **Blocage :** 3 prédictions consécutives du même costume:
-   - Si ❌ détecté → Re-lance immédiatement puis bloque 5min
+   - Si ❌ détecté → Re-lance immédiatement au numéro suivant puis bloque 5min
    - Si 3 succès → Bloque 5min
    - Si changement de costume → Réinitialise le compteur
 
