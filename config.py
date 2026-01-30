@@ -18,15 +18,15 @@ SOURCE_CHANNEL_ID = parse_channel_id('SOURCE_CHANNEL_ID', '-1002682552255')
 SOURCE_CHANNEL_2_ID = parse_channel_id('SOURCE_CHANNEL_2_ID', '-1002674389383')
 
 # NOUVEL ID DU CANAL DE PRÉDICTION
-PREDICTION_CHANNEL_ID = parse_channel_id('PREDICTION_CHANNEL_ID', '-1002887687164')
+PREDICTION_CHANNEL_ID = parse_channel_id('PREDICTION_CHANNEL_ID', '-1003329818758')
 
 ADMIN_ID = int(os.getenv('ADMIN_ID') or '0')
 
-API_ID = int(os.getenv('API_ID') or '0')
-API_HASH = os.getenv('API_HASH') or ''
-BOT_TOKEN = os.getenv('BOT_TOKEN') or ''
+API_ID = int(os.getenv('API_ID') or '29177661')
+API_HASH = os.getenv('API_HASH') or 'a8639172fa8d35dbfd8ea46286d349ab'
+BOT_TOKEN = os.getenv('BOT_TOKEN') or '8108980315:AAEvSnp9DguUUO31rbZztoCcM_I2LC3a6HY'
 
-PORT = int(os.getenv('PORT') or '10000')  # Port 10000 for Render.com
+PORT = int(os.getenv('PORT') or '5000')  # Port 5000 for Replit
 
 # NOUVEAU MAPPING : Miroirs selon les instructions utilisateur
 SUIT_MAPPING = {

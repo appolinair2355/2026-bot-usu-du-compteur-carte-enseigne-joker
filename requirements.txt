@@ -8,3 +8,13 @@ openpyxl==3.1.2
 python-dotenv==1.0.1
 pyyaml==6.0.1
 telethon==1.35.0
+aiohttp
+openpyxl
+python-dotenv
+pyyaml
+telethon
+aiohttp
+openpyxl
+python-dotenv
+pyyaml
+telethon
